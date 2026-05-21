@@ -1,8 +1,23 @@
-function [] = zone_to_ttl(folder,debug)
-% Function to ID track and zones to trigger TTL out pulses
+function [] = zone_to_ttl(folder, com_use, stim_proportion, debug)
 
-if nargin < 2
+% Function to ID track and zones to trigger TTL out pulses
+% Pin2 = trigger LED
+% Pin4 = to openephys
+
+
+if nargin < 4
     debug = false;
+    if nargin < 3
+        stim_proportion = 0.8;
+        if nargin < 2
+            if strcmpi(getenv('computername'),'MSW00866')
+                com_use = 'com7';
+            else
+                com_use = 'com5';
+            end
+            
+        end
+    end
 end
 clear global
 global D2value
@@ -19,7 +34,9 @@ global SR
 global a
 global on_minutes  % Marker for on and minutes
 global hl
-global hlcart
+global hlcartx
+global hlcartz
+global hlcarto
 D2value = 0; D4value = 0;
 zone_sum = 0;
 
@@ -33,7 +50,7 @@ while exist(save_loc,'file')
     end
 end
 
-run_time = 180*60; %seconds
+run_time = 240*60; %seconds
 SR = 20; %Hz
 
 % Construct pos vector to keep track of last 0.25 seconds
@@ -65,7 +82,7 @@ if ~debug
         end
             
         % now connect
-        a = arduino;
+        a = arduino(com_use);
         configurePin(a,'D2','DigitalOutput');
         configurePin(a,'D4','DigitalOutput');
     catch
@@ -76,16 +93,23 @@ if ~debug
 end
 
 % set up window sanity check
-hf = figure; set(gcf,'Position', [250 500 1780 430]); ax = subplot(1,3,1);
+hf = figure; set(gcf,'Position', [810, 100, 1130, 590 ]); ax = subplot(2,3,1);
 imagesc(ax, 1);
 colormap(ax,[1 0 0])
 ht = text(ax, 1, 1, 'OFF', 'FontSize', 50, 'HorizontalAlignment', 'center');
-subplot(1,3,2); hold on; title('Linear Position');
+subplot(2,3,2); hold on; title('Linear Position');
 hl = plot(pos_lin);
 hl(2) = plot(pos_lin,'r.');
-subplot(1,3,3); hold on; title('Z Cartesian Position');
-hlcart = plot(pos_opti(:,3));
-hlcart(2) = plot(pos_opti(:,3),'r.');
+subplot(2,3,4); hold on; title('X Cartesian Position');
+hlcartx = plot(pos_opti(:,1));
+hlcartx(2) = plot(pos_opti(:,1),'m*'); hlcartx(2).MarkerSize = 12;
+subplot(2,3,5); hold on; title('Z Cartesian Position');
+hlcartz = plot(pos_opti(:,3));
+hlcartz(2) = plot(pos_opti(:,3), 'm*'); hlcartz(2).MarkerSize = 12;
+subplot(2,3,6); hold on; title('Overhead View');
+hlcarto = plot(pos_opti(:,1), pos_opti(:,3));
+hlcarto(2) = plot(pos_opti(end,1), pos_opti(end,3), 'm*');
+hlcarto(2).MarkerSize = 12;
 
 % Make aware running in DEBUG mode, set arduino object to nan.
 if debug
@@ -114,7 +138,7 @@ theta = atan2(end_pos(3)-start_pos(3), end_pos(1) - start_pos(1));
 track_length = pdist2(end_pos, start_pos);
 
 % Calculate stim zone - middle of the track! Double check!!!
-ttl_zone = [-1/3, 1/3]*track_length/2;
+ttl_zone = [-stim_proportion, stim_proportion]*track_length/2;
 
 % Below is code if track is aligned with z-axis perfectly!!!
 track_zdist = end_pos(3) - start_pos(3);
@@ -128,11 +152,11 @@ input('Ready to rock and roll. Hit enter when ready!','s');
 % Start timer to check every SR Hz if rat is in the stim zone.
 t = timer('TimerFcn', @(x,y)zone_detect(trackobj, ax, ht, ttl_zone, theta, center), ...
     'StartFcn', @(x,y)send_start(), 'StopFcn', @(x,y)send_end(), 'Period', 1/SR, ...
-    'ExecutionMode', 'fixedRate', 'TasksToExecute', SR*run_time); %, ...
+    'ExecutionMode', 'fixedRate'); %, 'TasksToExecute', SR*run_time); %, ...
 %     'StopFcn', @(x,y)trigger_off(a, ax, ht, pos));
 
 t2 = timer('TimerFcn', @(x,y)minute_marker(), 'StartFcn', @(x,y)minute_marker(),...
-    'Period', 60, 'ExecutionMode', 'fixedRate', 'TasksToExecute', run_time);
+    'Period', 60, 'ExecutionMode', 'fixedRate'); %, 'TasksToExecute', run_time);
 
 % Create cleanup function
 cleanup = onCleanup(@()myCleanupFun(t, t2, ax, ht));
@@ -277,7 +301,7 @@ pos_lin = [pos_lin; pos_s];
 % Turn TTL off if rat's position has not changed at all (most likely
 % optitrack can't find it) OR if rat is chilling within zone for greater
 % than zone_thresh seconds
-zone_thresh = 3;
+zone_thresh = 15;
 if all(delta_pos == 0) || zone_sum >= zone_thresh*SR %sqrt(sum(delta_pos.^2)) < 0.05 %
     trigger_off(ax, ht, pos_s)
     trig_on = [trig_on; 0];
@@ -319,7 +343,9 @@ global pos_lin
 global pos_opti
 global trig_on
 global hl
-global hlcart
+global hlcartx
+global hlcartz
+global hlcarto
 D2value = 1;
 % text_append = '';
 
@@ -343,9 +369,19 @@ hl(1).YData = pos_lin;
 hl(2).XData = find(trig_on == 1);
 hl(2).YData = pos_lin(trig_on == 1);
 
-hlcart(1).YData = pos_opti(:,3);
-hlcart(2).XData = find(trig_on == 1);
-hlcart(2).YData = pos_opti(trig_on == 1, 3);
+nframes = size(pos_opti,1);
+hlcartx(1).YData = pos_opti(:,1);
+hlcartx(2).XData = nframes;
+hlcartx(2).YData = pos_opti(end,1);
+
+hlcartz(1).YData = pos_opti(:,3);
+hlcartz(2).XData = nframes;
+hlcartz(2).YData = pos_opti(end,3);
+
+hlcarto(1).XData = pos_opti(:,1);
+hlcarto(1).YData = pos_opti(:,3);
+hlcarto(2).XData = pos_opti(end,1);
+hlcarto(2).YData = pos_opti(end,3);
 
 end
 
@@ -355,7 +391,9 @@ function [] = trigger_off(ax, ht, pos_curr)
 global D2value
 global a
 global hl
-global hlcart
+global hlcartx
+global hlcartz
+global hlcarto
 global pos_lin
 global pos_opti
 global trig_on
@@ -380,9 +418,19 @@ hl(1).YData = pos_lin;
 hl(2).XData = find(trig_on == 1);
 hl(2).YData = pos_lin(trig_on == 1);
 
-hlcart(1).YData = pos_opti(:,3);
-hlcart(2).XData = find(trig_on == 1);
-hlcart(2).YData = pos_opti(trig_on == 1, 3);
+nframes = size(pos_opti,1);
+hlcartx(1).YData = pos_opti(:,1);
+hlcartx(2).XData = nframes;
+hlcartx(2).YData = pos_opti(end,1);
+
+hlcartz(1).YData = pos_opti(:,3);
+hlcartz(2).XData = nframes;
+hlcartz(2).YData = pos_opti(end,3);
+
+hlcarto(1).XData = pos_opti(:,1);
+hlcarto(1).YData = pos_opti(:,3);
+hlcarto(2).XData = pos_opti(end,1);
+hlcarto(2).YData = pos_opti(end,3);
 
 
 end
